@@ -40,6 +40,39 @@
 
 int next_device_id;
 
+#ifdef ANDROID
+typedef	u_int32_t tcp_seq;
+/*
+ * TCP header.
+ * Per RFC 793, September, 1981.
+ */
+struct tcphdr_bsd
+  {
+    u_int16_t th_sport;		/* source port */
+    u_int16_t th_dport;		/* destination port */
+    tcp_seq th_seq;		/* sequence number */
+    tcp_seq th_ack;		/* acknowledgement number */
+#  if __BYTE_ORDER == __LITTLE_ENDIAN
+    u_int8_t th_x2:4;		/* (unused) */
+    u_int8_t th_off:4;		/* data offset */
+#  endif
+#  if __BYTE_ORDER == __BIG_ENDIAN
+    u_int8_t th_off:4;		/* data offset */
+    u_int8_t th_x2:4;		/* (unused) */
+#  endif
+    u_int8_t th_flags;
+#  define TH_FIN	0x01
+#  define TH_SYN	0x02
+#  define TH_RST	0x04
+#  define TH_PUSH	0x08
+#  define TH_ACK	0x10
+#  define TH_URG	0x20
+    u_int16_t th_win;		/* window */
+    u_int16_t th_sum;		/* checksum */
+    u_int16_t th_urp;		/* urgent pointer */
+};
+#endif
+
 #define DEV_MRU 65536
 
 #define CONN_INBUF_SIZE		262144
@@ -194,7 +227,11 @@ static int send_packet(struct mux_device *dev, enum mux_protocol proto, void *he
 			hdrlen = 0;
 			break;
 		case MUX_PROTO_TCP:
+#ifdef ANDROID
+			hdrlen = sizeof(struct tcphdr_bsd);
+#else
 			hdrlen = sizeof(struct tcphdr);
+#endif
 			break;
 		default:
 			usbmuxd_log(LL_ERROR, "Invalid protocol %d for outgoing packet (dev %d hdr %p data %p len %d)", proto, dev->id, header, data, length);
@@ -258,7 +295,11 @@ static uint16_t find_sport(struct mux_device *dev)
 
 static int send_anon_rst(struct mux_device *dev, uint16_t sport, uint16_t dport, uint32_t ack)
 {
+#ifdef ANDROID
+	struct tcphdr_bsd th;
+#else
 	struct tcphdr th;
+#endif
 	memset(&th, 0, sizeof(th));
 	th.th_sport = htons(sport);
 	th.th_dport = htons(dport);
@@ -274,7 +315,11 @@ static int send_anon_rst(struct mux_device *dev, uint16_t sport, uint16_t dport,
 
 static int send_tcp(struct mux_connection *conn, uint8_t flags, const unsigned char *data, int length)
 {
+#ifdef ANDROID
+	struct tcphdr_bsd th;
+#else
 	struct tcphdr th;
+#endif
 	memset(&th, 0, sizeof(th));
 	th.th_sport = htons(conn->sport);
 	th.th_dport = htons(conn->dport);
@@ -368,7 +413,11 @@ int device_start_connect(int device_id, uint16_t dport, struct mux_client *clien
 	conn->tx_win = 131072;
 	conn->rx_recvd = 0;
 	conn->flags = 0;
+#ifdef ANDROID
+	conn->max_payload = USB_MTU - sizeof(struct mux_header) - sizeof(struct tcphdr_bsd);
+#else
 	conn->max_payload = USB_MTU - sizeof(struct mux_header) - sizeof(struct tcphdr);
+#endif
 
 	conn->ob_buf = malloc(CONN_OUTBUF_SIZE);
 	conn->ob_capacity = CONN_OUTBUF_SIZE;
@@ -616,7 +665,11 @@ static void device_control_input(struct mux_device *dev, unsigned char *payload,
  * @param payload Payload data.
  * @param payload_length Number of bytes in payload.
  */
+#ifdef ANDROID
+static void device_tcp_input(struct mux_device *dev, struct tcphdr_bsd *th, unsigned char *payload, uint32_t payload_length)
+#else
 static void device_tcp_input(struct mux_device *dev, struct tcphdr *th, unsigned char *payload, uint32_t payload_length)
+#endif
 {
 	uint16_t sport = ntohs(th->th_dport);
 	uint16_t dport = ntohs(th->th_sport);
@@ -769,7 +822,11 @@ void device_data_input(struct usb_device *usbdev, unsigned char *buffer, uint32_
 		return;
 	}
 
+#ifdef ANDROID
+	struct tcphdr_bsd *th;
+#else
 	struct tcphdr *th;
+#endif
 	unsigned char *payload;
 	uint32_t payload_length;
 
@@ -791,13 +848,25 @@ void device_data_input(struct usb_device *usbdev, unsigned char *buffer, uint32_
 			device_control_input(dev, payload, payload_length);
 			break;
 		case MUX_PROTO_TCP:
+#ifdef ANDROID
+			if(length < (mux_header_size + sizeof(struct tcphdr_bsd))) {
+#else
 			if(length < (mux_header_size + sizeof(struct tcphdr))) {
+#endif
 				usbmuxd_log(LL_ERROR, "Incoming TCP packet is too small (%d)", length);
 				return;
 			}
+#ifdef ANDROID
+			th = (struct tcphdr_bsd *)((char*)mhdr+mux_header_size);
+#else
 			th = (struct tcphdr *)((char*)mhdr+mux_header_size);
+#endif
 			payload = (unsigned char *)(th+1);
+#ifdef ANDROID
+			payload_length = length - sizeof(struct tcphdr_bsd) - mux_header_size;
+#else
 			payload_length = length - sizeof(struct tcphdr) - mux_header_size;
+#endif
 			device_tcp_input(dev, th, payload, payload_length);
 			break;
 		default:
