@@ -49,8 +49,13 @@
 #include "client.h"
 #include "conf.h"
 
+#ifdef ANDROID
+static const char *socket_path = "/data/misc/carlife/usbmuxd/usbmuxd";
+static const char *lockfile = "/data/misc/carlife/usbmuxd/usbmuxd.pid";
+#else
 static const char *socket_path = "/var/run/usbmuxd";
 static const char *lockfile = "/var/run/usbmuxd.pid";
+#endif
 
 int should_exit;
 int should_discover;
